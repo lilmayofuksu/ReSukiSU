@@ -7,6 +7,7 @@
 #include <asm/pgtable.h>
 #endif
 #include <linux/uaccess.h>
+#include <linux/compat.h>
 #include <asm/current.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
@@ -27,6 +28,7 @@
 #endif // #ifdef CONFIG_KSU_SUSFS
 
 #include "arch.h"
+#include "compat_syscall_nr.h"
 #include "policy/allowlist.h"
 #include "policy/feature.h"
 #include "klog.h" // IWYU pragma: keep
@@ -178,7 +180,7 @@ long ksu_handle_faccessat_sucompat_internal(int orig_nr, struct pt_regs *regs)
             pr_info("faccessat su->ksud!\n");
             orig_filename = *filename_user;
             *filename_user = ksud_user_path();
-            ret = ksu_syscall_table[orig_nr](regs);
+            ret = ksu_invoke_orig_syscall(orig_nr, regs);
             revert_creds(old_cred);
             *filename_user = orig_filename;
             return ret;
@@ -188,7 +190,7 @@ long ksu_handle_faccessat_sucompat_internal(int orig_nr, struct pt_regs *regs)
     }
 
 do_orig_facessat:
-    return ksu_syscall_table[orig_nr](regs);
+    return ksu_invoke_orig_syscall(orig_nr, regs);
 }
 
 long ksu_handle_stat_sucompat_internal(int orig_nr, struct pt_regs *regs)
@@ -213,7 +215,7 @@ long ksu_handle_stat_sucompat_internal(int orig_nr, struct pt_regs *regs)
             pr_info("newfstatat su->ksud!\n");
             orig_filename = *filename_user;
             *filename_user = ksud_user_path();
-            ret = ksu_syscall_table[orig_nr](regs);
+            ret = ksu_invoke_orig_syscall(orig_nr, regs);
             revert_creds(old_cred);
             *filename_user = orig_filename;
             return ret;
@@ -223,7 +225,7 @@ long ksu_handle_stat_sucompat_internal(int orig_nr, struct pt_regs *regs)
     }
 
 do_orig_stat:
-    return ksu_syscall_table[orig_nr](regs);
+    return ksu_invoke_orig_syscall(orig_nr, regs);
 }
 
 // ensure call from tracepoint
@@ -303,7 +305,15 @@ static long ksu_handle_execve_sucompat_common_internal(const char __user **filen
     }
     ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 
-    ret = ksu_syscall_table[__NR_execveat](regs);
+    // the registers above were rewritten into an execveat call, so dispatch that,
+    // in the calling task's own numbering
+    int execveat_nr = __NR_execveat;
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    if (is_compat_task())
+        execveat_nr = KSU_COMPAT_NR(execveat);
+#endif
+
+    ret = ksu_invoke_orig_syscall(execveat_nr, regs);
     if (ret < 0) {
         ksu_close_fd(tmp_fd);
         regs->__PT_PARM1_REG = orig_regs[0];
@@ -322,7 +332,7 @@ static long ksu_handle_execve_sucompat_common_internal(const char __user **filen
     return ret;
 
 do_orig_execve:
-    return ksu_syscall_table[orig_nr](regs);
+    return ksu_invoke_orig_syscall(orig_nr, regs);
 }
 
 long ksu_handle_execve_sucompat_internal(const char __user **filename_user, int orig_nr, struct pt_regs *regs)

@@ -14,6 +14,7 @@
 #endif
 
 #include "arch.h"
+#include "compat_syscall_nr.h"
 #include "klog.h" // IWYU pragma: keep
 #include "hook/syscall_hook_manager.h"
 #include "hook/tp_marker.h"
@@ -97,10 +98,14 @@ static void ksu_sys_enter_handler(void *data, struct pt_regs *regs, long id)
 {
 #if defined(__x86_64__)
     if (unlikely(in_compat_syscall()))
-#elif defined(__aarch64__)
-    if (unlikely(is_compat_task()))
-#endif
         return;
+#elif defined(__aarch64__) && defined(CONFIG_COMPAT)
+    // arm32 userspace on an arm64 kernel indexes its own syscall table
+    if (unlikely(is_compat_task()))
+        goto aarch64_compat;
+#elif !defined(__aarch64__)
+#error Unsupported arch
+#endif
 
     if (ksu_dispatcher_nr < 0)
         return;
@@ -118,6 +123,19 @@ static void ksu_sys_enter_handler(void *data, struct pt_regs *regs, long id)
         current_regs->syscallno = ksu_dispatcher_nr;
 #endif
     }
+
+    return;
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+aarch64_compat:
+    if (ksu_compat_dispatcher_nr < 0)
+        return;
+
+    // r7 still holds the original number and the kernel never writes it back,
+    // so unlike the native path nothing needs stashing.
+    if (ksu_has_compat_syscall_hook(id))
+        task_pt_regs(current)->syscallno = ksu_compat_dispatcher_nr;
+#endif
 }
 #endif
 
@@ -137,6 +155,15 @@ void __init ksu_syscall_hook_manager_init(void)
     ksu_register_syscall_hook(__NR_execveat, ksu_hook_execveat);
     ksu_register_syscall_hook(__NR_newfstatat, ksu_hook_newfstatat);
     ksu_register_syscall_hook(__NR_faccessat, ksu_hook_faccessat);
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    // bionic's 32-bit setresuid() is setresuid32; 164 is the 16-bit-uid legacy call
+    ksu_register_compat_syscall_hook(KSU_COMPAT_NR(setresuid32), ksu_hook_setresuid);
+    ksu_register_compat_syscall_hook(KSU_COMPAT_NR(execve), ksu_hook_execve);
+    ksu_register_compat_syscall_hook(KSU_COMPAT_NR(execveat), ksu_hook_execveat);
+    ksu_register_compat_syscall_hook(KSU_COMPAT_NR(fstatat64), ksu_hook_newfstatat);
+    ksu_register_compat_syscall_hook(KSU_COMPAT_NR(faccessat), ksu_hook_faccessat);
+#endif
 
 #ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
     ret = register_trace_prio_sys_enter(ksu_sys_enter_handler, NULL, INT_MIN);
@@ -173,6 +200,14 @@ void __exit ksu_syscall_hook_manager_exit(void)
     ksu_unregister_syscall_hook(__NR_execveat);
     ksu_unregister_syscall_hook(__NR_newfstatat);
     ksu_unregister_syscall_hook(__NR_faccessat);
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    ksu_unregister_compat_syscall_hook(KSU_COMPAT_NR(setresuid32));
+    ksu_unregister_compat_syscall_hook(KSU_COMPAT_NR(execve));
+    ksu_unregister_compat_syscall_hook(KSU_COMPAT_NR(execveat));
+    ksu_unregister_compat_syscall_hook(KSU_COMPAT_NR(fstatat64));
+    ksu_unregister_compat_syscall_hook(KSU_COMPAT_NR(faccessat));
+#endif
 
     ksu_syscall_hook_exit();
 

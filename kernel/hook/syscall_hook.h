@@ -1,6 +1,7 @@
 #ifndef __KSU_H_KSU_SYSCALL_HOOK
 #define __KSU_H_KSU_SYSCALL_HOOK
 #include <asm/syscall.h>
+#include <linux/compat.h>
 
 #if defined(__x86_64__)
 typedef sys_call_ptr_t syscall_fn_t;
@@ -8,8 +9,17 @@ typedef sys_call_ptr_t syscall_fn_t;
 
 extern syscall_fn_t *ksu_syscall_table;
 
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+extern syscall_fn_t *ksu_compat_syscall_table;
+#endif
+
 // Dispatcher slot number in syscall table
 extern int ksu_dispatcher_nr;
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+// Dispatcher slot number in compat syscall table
+extern int ksu_compat_dispatcher_nr;
+#endif
 
 // Syscall hook handler type.
 // orig_nr: the original syscall number before redirection
@@ -44,6 +54,30 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old);
 // Use this to cleanly undo a direct hook when it is no longer needed
 // (e.g. ksud unhooking __NR_read after init.rc injection is done).
 void ksu_syscall_table_unhook(int nr);
+
+// --- AArch32-on-AArch64 (compat) hook API ---
+// Same split as above, against compat_sys_call_table and the AArch32 syscall
+// numbers. The dispatcher recovers the original number from r7 rather than from
+// a stash, since AArch32 has no register to spare.
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+int ksu_register_compat_syscall_hook(int nr, ksu_syscall_hook_fn fn);
+void ksu_unregister_compat_syscall_hook(int nr);
+bool ksu_has_compat_syscall_hook(int nr);
+
+void ksu_compat_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old);
+void ksu_compat_syscall_table_unhook(int nr);
+#endif
+
+// Call the original handler for @nr out of the table the calling task belongs to.
+// @nr is in that task's own numbering, which is what a hook receives as orig_nr.
+static inline long __nocfi ksu_invoke_orig_syscall(int nr, const struct pt_regs *regs)
+{
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    if (is_compat_task())
+        return ksu_compat_syscall_table[nr](regs);
+#endif
+    return ksu_syscall_table[nr](regs);
+}
 
 void ksu_syscall_hook_init(void);
 void ksu_syscall_hook_exit(void);

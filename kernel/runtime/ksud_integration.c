@@ -32,9 +32,11 @@
 #include <linux/jump_label.h>
 #include <linux/static_key.h>
 #include <linux/vmalloc.h>
+#include <linux/compat.h>
 #include <linux/stat.h>
 
 #include "arch.h"
+#include "compat_syscall_nr.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
 #include "ksud.h"
@@ -86,6 +88,10 @@ static void stop_execve_hook(void);
     {
         ksu_syscall_table_unhook(__NR_read);
         ksu_syscall_table_unhook(__NR_fstat);
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+        ksu_compat_syscall_table_unhook(KSU_COMPAT_NR(read));
+        ksu_compat_syscall_table_unhook(KSU_COMPAT_NR(fstat64));
+#endif
         pr_info("unregister init_rc syscall hook\n");
         pr_info("stop init_rc_hook!\n");
     }
@@ -959,6 +965,14 @@ static void ksu_execve_hook_ksud_common(const char __user *filename_user, const 
     unsigned long addr;
     const char __user *fn;
 
+#ifdef CONFIG_COMPAT
+    // a 32-bit caller passes an array of 32-bit pointers
+    if (unlikely(in_compat_syscall())) {
+        argv.is_compat = true;
+        argv.ptr.compat = (const compat_uptr_t __user *)argv_user;
+    }
+#endif
+
     if (!filename_user)
         return;
 
@@ -992,6 +1006,9 @@ void ksu_execveat_hook_ksud(const struct pt_regs *regs)
 }
 
 static long (*orig_sys_read)(const struct pt_regs *regs);
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+static long (*orig_compat_sys_read)(const struct pt_regs *regs);
+#endif
 static long ksu_sys_read(const struct pt_regs *regs)
 {
     unsigned int fd = PT_REGS_PARM1(regs);
@@ -999,10 +1016,19 @@ static long ksu_sys_read(const struct pt_regs *regs)
     size_t *count_ptr = (size_t *)&PT_REGS_PARM3(regs);
 
     ksu_handle_sys_read(fd, buf_ptr, count_ptr);
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    if (is_compat_task() && orig_compat_sys_read)
+        return orig_compat_sys_read(regs);
+#endif
     return orig_sys_read(regs);
 }
 
 static long (*orig_sys_fstat)(const struct pt_regs *regs);
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+// 32-bit Android stats init.rc through fstat64
+static long (*orig_sys_fstat64)(const struct pt_regs *regs);
+#endif
 static long ksu_sys_fstat(const struct pt_regs *regs)
 {
     unsigned int fd = PT_REGS_PARM1(regs);
@@ -1020,16 +1046,33 @@ static long ksu_sys_fstat(const struct pt_regs *regs)
         fput(file);
     }
 
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    if (is_compat_task() && orig_sys_fstat64)
+        ret = orig_sys_fstat64(regs);
+    else
+        ret = orig_sys_fstat(regs);
+#else
     ret = orig_sys_fstat(regs);
+#endif
 
     if (is_rc) {
         void __user *st_size_ptr = statbuf + offsetof(struct stat, st_size);
+        size_t len = sizeof(long);
         long size, new_size;
         size_t extra = ksu_rc_len + module_rc_len;
-        if (!copy_from_user_nofault(&size, st_size_ptr, sizeof(long))) {
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+        // a 32-bit caller gets struct stat64, which lays st_size out differently
+        if (is_compat_task()) {
+            st_size_ptr = statbuf + offsetof(struct stat64, st_size);
+            len = sizeof(long long);
+        }
+#endif
+
+        if (!copy_from_user_nofault(&size, st_size_ptr, len)) {
             new_size = size + extra;
             pr_info("adding rc len: %ld -> %ld", size, new_size);
-            if (!copy_to_user_nofault(st_size_ptr, &new_size, sizeof(long))) {
+            if (!copy_to_user_nofault(st_size_ptr, &new_size, len)) {
                 pr_info("added rc len");
             } else {
                 pr_err("add rc len failed: statbuf 0x%lx", (unsigned long)st_size_ptr);
@@ -1079,6 +1122,11 @@ void __init ksu_ksud_init(void)
 
     ksu_syscall_table_hook(__NR_read, ksu_sys_read, &orig_sys_read);
     ksu_syscall_table_hook(__NR_fstat, ksu_sys_fstat, &orig_sys_fstat);
+
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+    ksu_compat_syscall_table_hook(KSU_COMPAT_NR(read), ksu_sys_read, &orig_compat_sys_read);
+    ksu_compat_syscall_table_hook(KSU_COMPAT_NR(fstat64), ksu_sys_fstat, &orig_sys_fstat64);
+#endif
 
     ret = register_kprobe(&input_event_kp);
     pr_info("ksud: input_event_kp: %d\n", ret);

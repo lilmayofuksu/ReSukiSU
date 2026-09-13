@@ -31,7 +31,7 @@ struct seccomp_filter {
     wait_queue_head_t wqh;
 };
 
-void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr, int compat_nr)
 {
     if (!filter) {
         return;
@@ -42,13 +42,13 @@ void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
     }
 
 #ifdef SECCOMP_ARCH_COMPAT
-    if (nr >= 0 && nr < SECCOMP_ARCH_COMPAT_NR) {
-        clear_bit(nr, filter->cache.allow_compat);
+    if (compat_nr >= 0 && compat_nr < SECCOMP_ARCH_COMPAT_NR) {
+        clear_bit(compat_nr, filter->cache.allow_compat);
     }
 #endif
 }
 
-void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr, int compat_nr)
 {
     if (!filter) {
         return;
@@ -59,8 +59,8 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
     }
 
 #ifdef SECCOMP_ARCH_COMPAT
-    if (nr >= 0 && nr < SECCOMP_ARCH_COMPAT_NR) {
-        set_bit(nr, filter->cache.allow_compat);
+    if (compat_nr >= 0 && compat_nr < SECCOMP_ARCH_COMPAT_NR) {
+        set_bit(compat_nr, filter->cache.allow_compat);
     }
 #endif
 }

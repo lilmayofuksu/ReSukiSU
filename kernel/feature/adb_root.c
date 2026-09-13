@@ -9,6 +9,7 @@
 #include <linux/static_key.h>
 #include <linux/slab.h>
 #include <linux/version.h>
+#include <linux/compat.h>
 
 // https://github.com/torvalds/linux/commit/68db0cf10678630d286f4bbbbdfa102951a35faa
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
@@ -94,8 +95,13 @@ static long setup_ld_preload(void ***envp_arg)
 {
     static const char kLdPreload[] = "LD_PRELOAD=/data/adb/ksu/lib/libadbroot.so";
     static const char kLdLibraryPath[] = "LD_LIBRARY_PATH=/data/adb/ksu/lib";
-    static const size_t kReadEnvBatch = 16;
-    static const size_t kPtrSize = sizeof(unsigned long);
+    enum { kReadEnvBatch = 16 };
+    // the caller's envp entries are its own pointer width, not the kernel's
+#ifdef CONFIG_COMPAT
+    const size_t ptr_size = in_compat_syscall() ? sizeof(u32) : sizeof(unsigned long);
+#else
+    const size_t ptr_size = sizeof(unsigned long);
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0) || defined(current_user_stack_pointer)
     unsigned long stackp = current_user_stack_pointer();
 #else
@@ -127,7 +133,10 @@ static long setup_ld_preload(void ***envp_arg)
     }
 
     for (;;) {
-        tmp_env_p2 = krealloc(tmp_env_p, (env_count + kReadEnvBatch + 2) * kPtrSize, GFP_KERNEL);
+        unsigned long raw[kReadEnvBatch];
+        size_t i;
+
+        tmp_env_p2 = krealloc(tmp_env_p, (env_count + kReadEnvBatch + 2) * sizeof(*tmp_env_p), GFP_KERNEL);
         if (tmp_env_p2 == NULL) {
             pr_err("alloc tmp env failed\n");
             ret = -ENOMEM;
@@ -135,16 +144,19 @@ static long setup_ld_preload(void ***envp_arg)
         }
         tmp_env_p = tmp_env_p2;
 
-        ret = copy_from_user(&tmp_env_p[env_count], (const void __user *)(envp + env_count * kPtrSize),
-                             kReadEnvBatch * kPtrSize);
+        ret = copy_from_user(raw, (const void __user *)(envp + env_count * ptr_size), kReadEnvBatch * ptr_size);
         if (ret < 0) {
             pr_warn("Access envp when adb_root_handle_execve failed: %ld\n", ret);
             ret = -EFAULT;
             goto out_release_env_p;
         }
-        size_t read_count = kReadEnvBatch * kPtrSize - ret;
-        size_t max_new_env_count = read_count / kPtrSize, new_env_count = 0;
+        size_t read_count = kReadEnvBatch * ptr_size - ret;
+        size_t max_new_env_count = read_count / ptr_size, new_env_count = 0;
         bool meet_zero = false;
+
+        for (i = 0; i < max_new_env_count; i++)
+            tmp_env_p[env_count + i] = (ptr_size == sizeof(u32)) ? ((const u32 *)raw)[i] : raw[i];
+
         for (; new_env_count < max_new_env_count; new_env_count++) {
             if (!tmp_env_p[new_env_count + env_count]) {
                 meet_zero = true;
@@ -152,7 +164,7 @@ static long setup_ld_preload(void ***envp_arg)
             }
         }
         if (!meet_zero) {
-            if (read_count % kPtrSize != 0) {
+            if (read_count % ptr_size != 0) {
                 pr_err("unaligned envp array!\n");
                 ret = -EFAULT;
                 goto out_release_env_p;
@@ -172,7 +184,17 @@ static long setup_ld_preload(void ***envp_arg)
     tmp_env_p[env_count++] = ld_preload_p;
     tmp_env_p[env_count++] = ld_library_path_p;
     tmp_env_p[env_count++] = 0;
-    total_size = env_count * kPtrSize;
+    total_size = env_count * ptr_size;
+
+    // narrow in place: entry i moves strictly downwards, so it never clobbers
+    // an entry still to be read
+    if (ptr_size != sizeof(unsigned long)) {
+        u32 *narrowed = (u32 *)tmp_env_p;
+        size_t i;
+
+        for (i = 0; i < env_count; i++)
+            narrowed[i] = (u32)tmp_env_p[i];
+    }
 
     stackp -= total_size;
 

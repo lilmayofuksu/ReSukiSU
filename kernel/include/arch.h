@@ -18,6 +18,8 @@
 #define __PT_SP_REG sp
 #define __PT_IP_REG pc
 #define __PT_ORIG_SYSCALL_REG regs[8]
+// AArch32 passes the syscall number in r7, and el0_svc_compat never writes it back
+#define __PT_COMPAT_SYSCALL_REG regs[7]
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
 #define REBOOT_SYMBOL "__arm64_sys_reboot"
@@ -89,6 +91,7 @@
 #define PT_REGS_SP(x) (__PT_REGS_CAST(x)->__PT_SP_REG)
 #define PT_REGS_IP(x) (__PT_REGS_CAST(x)->__PT_IP_REG)
 #define PT_REGS_ORIG_SYSCALL(x) (__PT_REGS_CAST(x)->__PT_ORIG_SYSCALL_REG)
+#define PT_REGS_COMPAT_SYSCALL(x) (__PT_REGS_CAST(x)->__PT_COMPAT_SYSCALL_REG)
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 16, 0)
 #define PT_REAL_REGS(regs) ((struct pt_regs *)PT_REGS_PARM1(regs))
