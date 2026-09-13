@@ -345,6 +345,11 @@ static int ksu_patch_text_cb(void *arg)
 
 int ksu_patch_text(void *dst, void *src, size_t len, int flags)
 {
+#ifdef CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT
+    // Samsung EL2 rejects fixmap writes; force callers onto the kprobe fallback.
+    pr_warn("live patching disabled on Samsung EL2: dst=0x%lx len=%zu flags=0x%x\n", (unsigned long)dst, len, flags);
+    return -EOPNOTSUPP;
+#else
     struct patch_text_info info = {
         .dst = dst,
         .src = src,
@@ -372,6 +377,7 @@ int ksu_patch_text(void *dst, void *src, size_t len, int flags)
 #else
     return stop_machine(ksu_patch_text_cb, &info, cpu_online_mask);
 #endif
+#endif /* CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT */
 }
 
 /*

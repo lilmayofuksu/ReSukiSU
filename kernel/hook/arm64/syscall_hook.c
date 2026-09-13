@@ -83,13 +83,18 @@ static int patch_compat_syscall_table(int nr, syscall_fn_t fn)
 
 // Direct syscall table patching: overwrite syscall_table[nr] with fn,
 // save original to *old, and record for restoration at module exit.
-void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
+// Returns 0 on success, negative on failure. A patch failure (e.g. Samsung RKP
+// or NO_PATCH_TEXT) is reported so init can fall back to the kprobe path.
+int ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 {
+    int i, ret;
+    bool found = false;
+
     if (ksu_syscall_table == NULL)
-        return;
+        return -ENOENT;
     if (nr < 0 || nr >= __NR_syscalls) {
         pr_info("invalid nr: %d\n", nr);
-        return;
+        return -EINVAL;
     }
 
     mutex_lock(&hooked_entries_lock);
@@ -98,28 +103,34 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
     if (old)
         *old = orig;
 
-    // Record for later restoration
-    int i;
-    bool found = false;
     for (i = 0; i < hooked_count; i++) {
         if (hooked_entries[i].nr == nr) {
             found = true;
             break;
         }
     }
-    if (!found) {
-        if (hooked_count < ARRAY_SIZE(hooked_entries)) {
-            hooked_entries[hooked_count].nr = nr;
-            hooked_entries[hooked_count].orig = orig;
-            hooked_count++;
-        } else {
-            pr_warn("hooked_entries full, cannot track syscall %d for restoration\n", nr);
-        }
+    if (!found && hooked_count >= ARRAY_SIZE(hooked_entries)) {
+        pr_warn("hooked_entries full, cannot track syscall %d for restoration\n", nr);
+        mutex_unlock(&hooked_entries_lock);
+        return -ENOSPC;
     }
 
-    patch_syscall_table(nr, fn);
+    // Patch first; only record the entry once the patch actually took, so a
+    // rejected patch is not later "restored" over a value we never changed.
+    ret = patch_syscall_table(nr, fn);
+    if (ret) {
+        mutex_unlock(&hooked_entries_lock);
+        return ret;
+    }
+
+    if (!found) {
+        hooked_entries[hooked_count].nr = nr;
+        hooked_entries[hooked_count].orig = orig;
+        hooked_count++;
+    }
 
     mutex_unlock(&hooked_entries_lock);
+    return 0;
 }
 
 #ifdef CONFIG_COMPAT
@@ -475,7 +486,15 @@ void __init ksu_syscall_hook_init(void)
     }
 
     ksu_dispatcher_nr = ni_slot;
-    ksu_syscall_table_hook(ksu_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL);
+    if (ksu_syscall_table_hook(ksu_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL)) {
+        // The syscall table is write-protected (Samsung RKP / NO_PATCH_TEXT).
+        // Leave the dispatcher uninstalled; the manager engages the kprobe
+        // fallback when it sees ksu_dispatcher_nr < 0. Still fall through so the
+        // compat table is resolved for that fallback to read.
+        pr_warn("dispatcher slot %d unavailable; using architecture fallback\n", ksu_dispatcher_nr);
+        ksu_dispatcher_nr = -1;
+        goto init_compat;
+    }
     pr_info("dispatcher installed at slot %d\n", ksu_dispatcher_nr);
 
 init_compat:

@@ -33,6 +33,8 @@
 #include "infra/su_mount_ns.h"
 #ifdef CONFIG_KSU_TRACEPOINT_HOOK
 #include "hook/tp_marker.h"
+#include "compat/samsung_defex.h"
+#include "ksu_samsung_kdp.h"
 #endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 7, 0)
@@ -244,7 +246,15 @@ int escape_with_root_profile(void)
     setup_groups(profile, cred);
     setup_selinux(profile->selinux_domain, cred);
 
-    commit_creds(cred);
+    // On Samsung KDP kernels a hand-built cred cannot be committed directly;
+    // route through the KDP helper (a no-op wrapper elsewhere). On success it
+    // consumes @cred, so out_abort_creds is only for the failure path.
+    ret = ksu_samsung_kdp_commit_creds(cred);
+    if (ret) {
+        pr_err("Samsung KDP credential install failed: %d\n", ret);
+        goto out_abort_creds;
+    }
+    ksu_samsung_defex_sync_current();
 
     disable_seccomp();
 
@@ -279,6 +289,7 @@ void escape_to_root_for_init(void)
 
     setup_selinux(KERNEL_SU_CONTEXT, cred);
     commit_creds(cred);
+    ksu_samsung_defex_sync_current();
 }
 
 void __init ksu_app_profile_init(void)

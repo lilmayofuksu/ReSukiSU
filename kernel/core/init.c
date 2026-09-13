@@ -100,6 +100,9 @@ bool ksu_late_loaded;
 #include "hook/lsm_hook_magic.h"
 #endif
 
+#include "compat/samsung_defex.h"
+#include "ksu_samsung_kdp.h"
+
 static inline void __init ksu_hook_init(void)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
@@ -235,6 +238,23 @@ int __init kernelsu_init(void)
     }
 
     ksu_init_symbol_resolver();
+
+    // Samsung KNOX compat, all no-ops unless the CONFIG_KSU_SAMSUNG_* options
+    // are enabled. KDP must come up before any root escalation commits creds.
+    {
+        int samsung_ret = ksu_samsung_kdp_init();
+        if (samsung_ret) {
+            put_cred(ksu_cred);
+            return samsung_ret;
+        }
+        samsung_ret = ksu_samsung_defex_init();
+        if (samsung_ret) {
+            ksu_samsung_kdp_exit();
+            ksu_put_cred(ksu_cred);
+            return samsung_ret;
+        }
+    }
+
     ksu_selinux_init();
     ksu_feature_init();
     ksu_sulog_init();
@@ -324,7 +344,9 @@ void __exit kernelsu_exit(void)
     ksu_feature_exit();
     ksu_module_load_filter_hook_exit();
 
-    put_cred(ksu_cred);
+    ksu_samsung_defex_exit();
+    ksu_put_cred(ksu_cred);
+    ksu_samsung_kdp_exit();
 }
 
 #if NEED_OWN_STACKPROTECTOR
