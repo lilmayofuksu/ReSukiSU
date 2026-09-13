@@ -638,6 +638,7 @@ static int ksu_umount_list_getsize(struct ksu_manage_try_umount_cmd *cmd, bool l
 
     struct mount_entry *entry;
     size_t total_size = 0; // size of list in bytes
+    u32 reply_size;
 
     down_read(&mount_list_lock);
     list_for_each_entry (entry, &mount_list, list) {
@@ -653,7 +654,13 @@ static int ksu_umount_list_getsize(struct ksu_manage_try_umount_cmd *cmd, bool l
     // debug
     pr_info("cmd_manage_try_umount: total_size: %zu\n", total_size);
 
-    if (copy_to_user((size_t __user *)cmd->arg, &total_size, sizeof(total_size)))
+    if (total_size > U32_MAX)
+        return -EOVERFLOW;
+
+    // fixed width on purpose: a 32-bit caller's size_t is 4 bytes, so writing
+    // sizeof(size_t) here would run past the variable it pointed us at
+    reply_size = (u32)total_size;
+    if (copy_to_user((u32 __user *)cmd->arg, &reply_size, sizeof(reply_size)))
         return -EFAULT;
 
     return 0;
@@ -1114,7 +1121,10 @@ int ksu_try_handle_toolkit_cmd(int magic2, unsigned int cmd, void __user **arg)
         void ***ppptr = (void ***)(uintptr_t)arg;
 
         // user pointer storage
-        // init this as zero so this works on 32-on-64 compat (LE)
+        // NOTE: broken for 32-bit callers. The copy_from_user calls below take
+        // the kernel's pointer width, so zeroing these does not help: the high
+        // half gets whatever follows the caller's 4-byte pointer. Needs a
+        // compat_uptr_t read gated on in_compat_syscall(), as sulog/event.c does.
         uint64_t u_pptr = 0;
         uint64_t u_ptr = 0;
 
