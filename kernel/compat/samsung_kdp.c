@@ -27,8 +27,8 @@ typedef unsigned int (*kdp_usecount_sub_and_test_t)(int nr, struct cred *cred);
 typedef unsigned int (*kdp_usecount_dec_and_test_t)(struct cred *cred);
 #endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
-typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
+typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, int type, long value);
+typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, int type, long value);
 #endif
 
 struct samsung_kdp_commit_work {
