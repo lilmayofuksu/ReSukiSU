@@ -8,7 +8,7 @@
 #include "klog.h"
 #include "selinux/selinux.h"
 
-#ifdef CONFIG_KSU_SAMSUNG_DEFEX
+#if defined(CONFIG_KSU_SAMSUNG_DEFEX) && defined(__aarch64__)
 typedef void (*defex_get_task_creds_t)(struct task_struct *task,
 				       unsigned int *uid, unsigned int *fsuid,
 				       unsigned int *egid,
@@ -42,7 +42,7 @@ static struct kprobe defex_enforce_kprobe = {
 
 int ksu_samsung_defex_init(void)
 {
-#ifdef CONFIG_KSU_SAMSUNG_DEFEX
+#if defined(CONFIG_KSU_SAMSUNG_DEFEX) && defined(__aarch64__)
 	int ret;
 
 	defex_get_task_creds =
@@ -69,7 +69,7 @@ int ksu_samsung_defex_init(void)
 
 void ksu_samsung_defex_exit(void)
 {
-#ifdef CONFIG_KSU_SAMSUNG_DEFEX
+#if defined(CONFIG_KSU_SAMSUNG_DEFEX) && defined(__aarch64__)
 	if (defex_enforce_hooked) {
 		unregister_kprobe(&defex_enforce_kprobe);
 		defex_enforce_hooked = false;
@@ -79,7 +79,7 @@ void ksu_samsung_defex_exit(void)
 
 void ksu_samsung_defex_sync_current(void)
 {
-#ifdef CONFIG_KSU_SAMSUNG_DEFEX
+#if defined(CONFIG_KSU_SAMSUNG_DEFEX) && defined(__aarch64__)
 	const struct cred *cred = current_cred();
 	unsigned int stored_uid;
 	unsigned int stored_fsuid;

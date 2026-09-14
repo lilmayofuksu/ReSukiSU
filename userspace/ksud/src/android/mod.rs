@@ -3,6 +3,8 @@ mod debug;
 mod dynamic_manager;
 mod feature;
 mod init_event;
+#[cfg(not(feature = "logcat"))]
+pub(crate) mod kmsg_log;
 mod ksucalls;
 mod late_load;
 mod module;

@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use android_logger::Config;
 use anyhow::{Context, Ok, Result};
 use clap::Parser;
 use log::{LevelFilter, error, info};
@@ -566,11 +565,15 @@ enum Initrc {
 
 #[allow(clippy::similar_names)]
 pub fn run() -> Result<()> {
+    let level = crate::debug_select!(LevelFilter::Trace, LevelFilter::Info);
+    #[cfg(feature = "logcat")]
     android_logger::init_once(
-        Config::default()
-            .with_max_level(crate::debug_select!(LevelFilter::Trace, LevelFilter::Info))
+        android_logger::Config::default()
+            .with_max_level(level)
             .with_tag("KernelSU"),
     );
+    #[cfg(not(feature = "logcat"))]
+    crate::android::kmsg_log::init(level);
 
     ksucalls::setup_sigsys_handler();
 

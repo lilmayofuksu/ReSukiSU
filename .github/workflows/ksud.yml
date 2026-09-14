@@ -73,7 +73,15 @@ jobs:
       - name: Build ksud
         run: |
           cd userspace/ksud/
-          cargo ndk b -P 26 -t ${{ inputs.target }} -r -Z build-std-features="optimize_for_size" -Z trim-paths
+          if [ "${{ inputs.target }}" = "aarch64-linux-android" ]; then
+            NDK="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-$ANDROID_NDK_LATEST_HOME}}"
+            CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+            BUILTINS="$("$CLANG" --target=aarch64-linux-android26 -rtlib=compiler-rt --print-libgcc-file-name)"
+            RUSTFLAGS="-C target-feature=+crt-static -C panic=abort -C link-arg=$BUILTINS" \
+              cargo ndk b -P 26 -t aarch64-linux-android -r --no-default-features -Z build-std=std,panic_abort -Z build-std-features="optimize_for_size" -Z trim-paths
+          else
+            cargo ndk b -P 26 -t ${{ inputs.target }} -r -Z build-std-features="optimize_for_size" -Z trim-paths
+          fi
 
       - name: Upload ksud artifact
         uses: actions/upload-artifact@v7

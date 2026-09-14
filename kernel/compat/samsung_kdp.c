@@ -14,7 +14,7 @@
 #include "ksu_samsung_kdp.h"
 #include "klog.h"
 
-#ifdef CONFIG_KSU_SAMSUNG_KDP
+#if defined(CONFIG_KSU_SAMSUNG_KDP) && defined(__aarch64__)
 enum samsung_kdp_cred_command {
     SAMSUNG_KDP_COPY_CREDS = 0,
 };
@@ -116,7 +116,7 @@ out:
 
 void ksu_samsung_kdp_put_cred(const struct cred *cred)
 {
-#ifdef CONFIG_KSU_SAMSUNG_KDP
+#if defined(CONFIG_KSU_SAMSUNG_KDP) && defined(__aarch64__)
     struct cred *mutable_cred = (struct cred *)cred;
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 0)
@@ -132,7 +132,7 @@ void ksu_samsung_kdp_put_cred(const struct cred *cred)
 
 int ksu_samsung_kdp_init(void)
 {
-#ifdef CONFIG_KSU_SAMSUNG_KDP
+#if defined(CONFIG_KSU_SAMSUNG_KDP) && defined(__aarch64__)
     prepare_ro_creds_fn = (prepare_ro_creds_t)ksu_resolve_symbol_for_functable_hook("prepare_ro_creds");
     kdp_assign_pgd_fn = (kdp_assign_pgd_t)ksu_resolve_symbol_for_functable_hook("kdp_assign_pgd");
     if (!prepare_ro_creds_fn || !kdp_assign_pgd_fn) {
@@ -174,7 +174,7 @@ void ksu_samsung_kdp_exit(void)
 
 int ksu_samsung_kdp_commit_creds(struct cred *cred)
 {
-#ifdef CONFIG_KSU_SAMSUNG_KDP
+#if defined(CONFIG_KSU_SAMSUNG_KDP) && defined(__aarch64__)
     struct samsung_kdp_commit_work commit_work;
     bool queued;
 
