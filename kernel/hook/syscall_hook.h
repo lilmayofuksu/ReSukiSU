@@ -1,7 +1,11 @@
 #ifndef __KSU_H_KSU_SYSCALL_HOOK
 #define __KSU_H_KSU_SYSCALL_HOOK
 #include <asm/syscall.h>
+#if defined(__aarch64__) && defined(CONFIG_COMPAT)
+// only the compat branch of ksu_invoke_orig_syscall needs is_compat_task();
+// pulling this in on x86 collides with kernel_compat.h's in_compat_syscall macro
 #include <linux/compat.h>
+#endif
 
 #if defined(__x86_64__)
 typedef sys_call_ptr_t syscall_fn_t;
