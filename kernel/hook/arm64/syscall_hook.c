@@ -458,7 +458,14 @@ void __init ksu_syscall_hook_init(void)
     if (ksu_syscall_table_hook(ksu_dispatcher_nr, (syscall_fn_t)ksu_syscall_dispatcher, NULL)) {
         pr_warn("dispatcher unavailable at slot %d; syscall event hooks disabled\n", ni_slot);
         ksu_dispatcher_nr = -1;
+        // Still resolve compat_sys_call_table below: the Samsung RKP kprobe
+        // fallback (and its 32-bit coverage) relies on it, and ksu_call_syscall()
+        // dereferences it for compat tasks.
+#ifdef CONFIG_COMPAT
+        goto init_compat_dispatcher;
+#else
         return;
+#endif
     }
     pr_info("dispatcher installed at slot %d\n", ksu_dispatcher_nr);
 #ifdef CONFIG_COMPAT

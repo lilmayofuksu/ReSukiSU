@@ -52,6 +52,15 @@ static bool samsung_sucompat_should_redirect(int syscall_nr)
         return false;
     }
 
+#ifdef CONFIG_COMPAT
+    // A 32-bit task can only be redirected safely once the compat syscall table
+    // is resolved: the wrappers hand ksu_call_syscall() a compat number, and it
+    // dereferences ksu_compat_syscall_table for compat tasks. If that table is
+    // unavailable, leave the syscall untouched rather than deref NULL.
+    if (is_compat_task() && !ksu_compat_syscall_table)
+        return false;
+#endif
+
 #ifdef KSU_COMPAT_USE_STATIC_KEY
     if (!static_branch_unlikely(&ksu_su_compat_enabled))
         return false;
@@ -63,14 +72,27 @@ static bool samsung_sucompat_should_redirect(int syscall_nr)
     return ksu_is_allow_uid_for_current(current_uid().val);
 }
 
+// ksu_call_syscall() picks the native vs compat syscall table by is_compat_task(),
+// indexing it with the number we pass. So each wrapper must hand ksu_hook_*() the
+// number that matches the *current* task's ABI: the native nr for a 64-bit task,
+// the compat (arm32) nr for a 32-bit task. This is what lets a single wrapper serve
+// both the native-table kprobe and (where the address differs) the compat-table kprobe,
+// and it also fixes the case where a 32-bit task hits a syscall whose native and compat
+// table entries share one address (e.g. faccessat).
 static long __nocfi samsung_sucompat_execve(const struct pt_regs *regs)
 {
     struct pt_regs *syscall_regs = (struct pt_regs *)regs;
     int syscall_nr = syscall_regs->syscallno;
+    int nr = __NR_execve;
     long ret;
 
+#ifdef CONFIG_COMPAT
+    if (is_compat_task())
+        nr = ksu_get_compat_syscall_no(execve);
+#endif
+
     syscall_regs->syscallno = SAMSUNG_SUCOMPAT_BYPASS_NR;
-    ret = ksu_hook_execve(__NR_execve, regs);
+    ret = ksu_hook_execve(nr, regs);
     syscall_regs->syscallno = syscall_nr;
     return ret;
 }
@@ -79,10 +101,17 @@ static long __nocfi samsung_sucompat_newfstatat(const struct pt_regs *regs)
 {
     struct pt_regs *syscall_regs = (struct pt_regs *)regs;
     int syscall_nr = syscall_regs->syscallno;
+    int nr = __NR_newfstatat;
     long ret;
 
+#ifdef CONFIG_COMPAT
+    // arm32 has no newfstatat; the equivalent stat-by-fd-and-path is fstatat64.
+    if (is_compat_task())
+        nr = ksu_get_compat_syscall_no(fstatat64);
+#endif
+
     syscall_regs->syscallno = SAMSUNG_SUCOMPAT_BYPASS_NR;
-    ret = ksu_hook_newfstatat(__NR_newfstatat, regs);
+    ret = ksu_hook_newfstatat(nr, regs);
     syscall_regs->syscallno = syscall_nr;
     return ret;
 }
@@ -91,10 +120,16 @@ static long __nocfi samsung_sucompat_faccessat(const struct pt_regs *regs)
 {
     struct pt_regs *syscall_regs = (struct pt_regs *)regs;
     int syscall_nr = syscall_regs->syscallno;
+    int nr = __NR_faccessat;
     long ret;
 
+#ifdef CONFIG_COMPAT
+    if (is_compat_task())
+        nr = ksu_get_compat_syscall_no(faccessat);
+#endif
+
     syscall_regs->syscallno = SAMSUNG_SUCOMPAT_BYPASS_NR;
-    ret = ksu_hook_faccessat(__NR_faccessat, regs);
+    ret = ksu_hook_faccessat(nr, regs);
     syscall_regs->syscallno = syscall_nr;
     return ret;
 }
@@ -152,6 +187,14 @@ static int samsung_sucompat_faccessat_pre_handler(struct kprobe *probe, struct p
 
 static int samsung_sucompat_statx_pre_handler(struct kprobe *probe, struct pt_regs *regs)
 {
+#ifdef CONFIG_COMPAT
+    // statx has no distinct compat number in our resolvable set, and its native
+    // and compat table entries share one address. Don't redirect compat tasks
+    // here, or ksu_call_syscall() would index the compat table with the native
+    // statx number. 32-bit statx runs unmodified.
+    if (is_compat_task())
+        return 0;
+#endif
     if (!samsung_sucompat_should_redirect(__NR_statx))
         return 0;
 
@@ -161,6 +204,11 @@ static int samsung_sucompat_statx_pre_handler(struct kprobe *probe, struct pt_re
 
 static int samsung_sucompat_faccessat2_pre_handler(struct kprobe *probe, struct pt_regs *regs)
 {
+#ifdef CONFIG_COMPAT
+    // Same reasoning as statx: leave 32-bit faccessat2 unmodified.
+    if (is_compat_task())
+        return 0;
+#endif
     if (!samsung_sucompat_should_redirect(__NR_faccessat2))
         return 0;
 
@@ -168,6 +216,7 @@ static int samsung_sucompat_faccessat2_pre_handler(struct kprobe *probe, struct 
     return 1;
 }
 
+// Native (AArch64) syscall-table kprobes.
 static struct kprobe samsung_sucompat_execve_kprobe = {
     .pre_handler = samsung_sucompat_execve_pre_handler,
 };
@@ -188,59 +237,121 @@ static struct kprobe samsung_sucompat_faccessat2_kprobe = {
     .pre_handler = samsung_sucompat_faccessat2_pre_handler,
 };
 
+#ifdef CONFIG_COMPAT
+// Compat (AArch32) syscall-table kprobes. They reuse the native pre_handlers —
+// which redirect to the is_compat_task()-aware wrappers — and are only registered
+// when the compat table entry differs from the native one (see the init below).
+static struct kprobe samsung_sucompat_compat_execve_kprobe = {
+    .pre_handler = samsung_sucompat_execve_pre_handler,
+};
+
+static struct kprobe samsung_sucompat_compat_fstatat64_kprobe = {
+    .pre_handler = samsung_sucompat_newfstatat_pre_handler,
+};
+
+static struct kprobe samsung_sucompat_compat_faccessat_kprobe = {
+    .pre_handler = samsung_sucompat_faccessat_pre_handler,
+};
+#endif
+
+// Track which kprobes we actually registered so init rollback and exit can
+// unregister exactly that set (the compat ones are conditional).
+static struct kprobe *samsung_sucompat_registered[8];
+static int samsung_sucompat_registered_count;
+
+static int __init samsung_sucompat_register_probe(struct kprobe *kp, kprobe_opcode_t *addr)
+{
+    int ret;
+
+    if (!addr)
+        return 0;
+
+    kp->addr = addr;
+    ret = register_kprobe(kp);
+    if (ret)
+        return ret;
+
+    samsung_sucompat_registered[samsung_sucompat_registered_count++] = kp;
+    return 0;
+}
+
+static void samsung_sucompat_unregister_all(void)
+{
+    while (samsung_sucompat_registered_count > 0)
+        unregister_kprobe(samsung_sucompat_registered[--samsung_sucompat_registered_count]);
+}
+
 static int __init samsung_sucompat_hook_init(void)
 {
+    kprobe_opcode_t *execve_addr, *newfstatat_addr, *faccessat_addr, *statx_addr, *faccessat2_addr;
     int ret;
 
     if (!ksu_syscall_table)
         return -ENOENT;
 
-    samsung_sucompat_execve_kprobe.addr =
-        (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_execve]);
-    samsung_sucompat_newfstatat_kprobe.addr =
-        (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_newfstatat]);
-    samsung_sucompat_faccessat_kprobe.addr =
-        (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_faccessat]);
-    samsung_sucompat_statx_kprobe.addr =
-        (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_statx]);
-    samsung_sucompat_faccessat2_kprobe.addr =
-        (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_faccessat2]);
+    samsung_sucompat_registered_count = 0;
+
+    execve_addr = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_execve]);
+    newfstatat_addr = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_newfstatat]);
+    faccessat_addr = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_faccessat]);
+    statx_addr = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_statx]);
+    faccessat2_addr = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_faccessat2]);
 
     ksu_sucompat_init();
 
-    ret = register_kprobe(&samsung_sucompat_execve_kprobe);
+    ret = samsung_sucompat_register_probe(&samsung_sucompat_execve_kprobe, execve_addr);
     if (ret)
-        goto exit_sucompat;
+        goto fail;
+    ret = samsung_sucompat_register_probe(&samsung_sucompat_newfstatat_kprobe, newfstatat_addr);
+    if (ret)
+        goto fail;
+    ret = samsung_sucompat_register_probe(&samsung_sucompat_faccessat_kprobe, faccessat_addr);
+    if (ret)
+        goto fail;
+    ret = samsung_sucompat_register_probe(&samsung_sucompat_statx_kprobe, statx_addr);
+    if (ret)
+        goto fail;
+    ret = samsung_sucompat_register_probe(&samsung_sucompat_faccessat2_kprobe, faccessat2_addr);
+    if (ret)
+        goto fail;
 
-    ret = register_kprobe(&samsung_sucompat_newfstatat_kprobe);
-    if (ret)
-        goto unregister_execve;
+#ifdef CONFIG_COMPAT
+    // 32-bit userspace dispatches through compat_sys_call_table. Hook the compat
+    // entries for execve / fstatat64 / faccessat, but only when they resolve to a
+    // different address than their native counterparts — a shared entry is already
+    // covered by the native kprobe above, whose wrapper picks the compat number.
+    if (ksu_compat_syscall_table) {
+        kprobe_opcode_t *c_execve =
+            (kprobe_opcode_t *)READ_ONCE(ksu_compat_syscall_table[ksu_get_compat_syscall_no(execve)]);
+        kprobe_opcode_t *c_fstatat64 =
+            (kprobe_opcode_t *)READ_ONCE(ksu_compat_syscall_table[ksu_get_compat_syscall_no(fstatat64)]);
+        kprobe_opcode_t *c_faccessat =
+            (kprobe_opcode_t *)READ_ONCE(ksu_compat_syscall_table[ksu_get_compat_syscall_no(faccessat)]);
 
-    ret = register_kprobe(&samsung_sucompat_faccessat_kprobe);
-    if (ret)
-        goto unregister_newfstatat;
-
-    ret = register_kprobe(&samsung_sucompat_statx_kprobe);
-    if (ret)
-        goto unregister_faccessat;
-
-    ret = register_kprobe(&samsung_sucompat_faccessat2_kprobe);
-    if (ret)
-        goto unregister_statx;
+        if (c_execve && c_execve != execve_addr) {
+            ret = samsung_sucompat_register_probe(&samsung_sucompat_compat_execve_kprobe, c_execve);
+            if (ret)
+                goto fail;
+        }
+        if (c_fstatat64 && c_fstatat64 != newfstatat_addr) {
+            ret = samsung_sucompat_register_probe(&samsung_sucompat_compat_fstatat64_kprobe, c_fstatat64);
+            if (ret)
+                goto fail;
+        }
+        if (c_faccessat && c_faccessat != faccessat_addr) {
+            ret = samsung_sucompat_register_probe(&samsung_sucompat_compat_faccessat_kprobe, c_faccessat);
+            if (ret)
+                goto fail;
+        }
+    }
+#endif
 
     samsung_sucompat_kprobes_registered = true;
-    pr_info("hook_manager: Samsung sucompat kprobes registered\n");
+    pr_info("hook_manager: Samsung sucompat kprobes registered (%d probes)\n", samsung_sucompat_registered_count);
     return 0;
 
-unregister_statx:
-    unregister_kprobe(&samsung_sucompat_statx_kprobe);
-unregister_faccessat:
-    unregister_kprobe(&samsung_sucompat_faccessat_kprobe);
-unregister_newfstatat:
-    unregister_kprobe(&samsung_sucompat_newfstatat_kprobe);
-unregister_execve:
-    unregister_kprobe(&samsung_sucompat_execve_kprobe);
-exit_sucompat:
+fail:
+    samsung_sucompat_unregister_all();
     ksu_sucompat_exit();
     return ret;
 }
@@ -250,11 +361,7 @@ static void __exit samsung_sucompat_hook_exit(void)
     if (!samsung_sucompat_kprobes_registered)
         return;
 
-    unregister_kprobe(&samsung_sucompat_faccessat2_kprobe);
-    unregister_kprobe(&samsung_sucompat_statx_kprobe);
-    unregister_kprobe(&samsung_sucompat_faccessat_kprobe);
-    unregister_kprobe(&samsung_sucompat_newfstatat_kprobe);
-    unregister_kprobe(&samsung_sucompat_execve_kprobe);
+    samsung_sucompat_unregister_all();
     samsung_sucompat_kprobes_registered = false;
     ksu_sucompat_exit();
 }
@@ -310,6 +417,19 @@ static struct kretprobe setresuid_kretprobe = {
     .data_size = sizeof(uid_t),
 };
 
+#ifdef CONFIG_COMPAT
+// 32-bit userspace calls setresuid32; hook it by address only when it resolves to a
+// different handler than native setresuid (otherwise the native kretprobe above
+// already fires for compat callers). The handlers are ABI-independent (they read
+// current_uid() before/after), so they are reused as-is.
+static bool setresuid32_kretprobe_registered;
+static struct kretprobe setresuid32_kretprobe = {
+    .entry_handler = setresuid_entry_handler,
+    .handler = setresuid_return_handler,
+    .data_size = sizeof(uid_t),
+};
+#endif
+
 static int __init samsung_setresuid_hook_init(void)
 {
     int ret = register_kretprobe(&setresuid_kretprobe);
@@ -320,6 +440,26 @@ static int __init samsung_setresuid_hook_init(void)
     }
 
     setresuid_kretprobe_registered = true;
+
+#ifdef CONFIG_COMPAT
+    if (ksu_syscall_table && ksu_compat_syscall_table) {
+        kprobe_opcode_t *native = (kprobe_opcode_t *)READ_ONCE(ksu_syscall_table[__NR_setresuid]);
+        kprobe_opcode_t *compat =
+            (kprobe_opcode_t *)READ_ONCE(ksu_compat_syscall_table[ksu_get_compat_syscall_no(setresuid32)]);
+
+        if (compat && compat != native) {
+            setresuid32_kretprobe.kp.addr = compat;
+            ret = register_kretprobe(&setresuid32_kretprobe);
+            if (ret)
+                // Non-fatal: native setresuid tracking still works; only the
+                // 32-bit setresuid32 path is left uncovered.
+                pr_err("hook_manager: Samsung setresuid32 kretprobe failed: %d\n", ret);
+            else
+                setresuid32_kretprobe_registered = true;
+        }
+    }
+#endif
+
     ksu_setuid_hook_init();
     pr_info("hook_manager: Samsung setresuid kretprobe registered\n");
     return 0;
@@ -330,6 +470,12 @@ static void __exit samsung_setresuid_hook_exit(void)
     if (!setresuid_kretprobe_registered)
         return;
 
+#ifdef CONFIG_COMPAT
+    if (setresuid32_kretprobe_registered) {
+        unregister_kretprobe(&setresuid32_kretprobe);
+        setresuid32_kretprobe_registered = false;
+    }
+#endif
     unregister_kretprobe(&setresuid_kretprobe);
     setresuid_kretprobe_registered = false;
     ksu_setuid_hook_exit();
