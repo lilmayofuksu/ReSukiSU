@@ -49,12 +49,6 @@ pub fn run(package_name: &String, kmi: Option<String>, allow_shell: bool) -> Res
     info!("late-load command triggered!");
     dump_process_info("late-load start");
 
-    // Stage the ksud daemon into /data/adb/ksud BEFORE loading the module.
-    // Loading kernelsu.ko can change this process's security context (e.g.
-    // Samsung KDP/RKP), after which copying /proc/self/exe would fail; the
-    // remaining install steps run afterwards via finish_install().
-    utils::stage_daemon().context("Failed to stage ksud")?;
-
     // 1. Check if KernelSU is already loaded
     if ksuinit::has_kernelsu() {
         info!("KernelSU already loaded, skip loading ko");
@@ -94,7 +88,7 @@ pub fn run(package_name: &String, kmi: Option<String>, allow_shell: bool) -> Res
         warn!("clear temp configs failed: {e}");
     }
 
-    utils::finish_install(None, None).context("Failed to finish ksud installation")?;
+    utils::install(None, None).context("Failed to install ksud")?;
 
     // 5. Handle module updates
     if let Err(e) = handle_updated_modules() {

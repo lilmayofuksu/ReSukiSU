@@ -296,9 +296,9 @@ jobs:
 
       - name: Prepare signing inputs
         env:
-          PR_KEYSTORE: ${{ needs.generate-key.outputs.keystore }}
-          PR_KEYSTORE_PASSWORD: ${{ needs.generate-key.outputs.keystore_password }}
-          PR_KEY_PASSWORD: ${{ needs.generate-key.outputs.key_password }}
+          PR_KEYSTORE: ${{ needs.prepare.outputs.keystore }}
+          PR_KEYSTORE_PASSWORD: ${{ needs.prepare.outputs.keystore_password }}
+          PR_KEY_PASSWORD: ${{ needs.prepare.outputs.key_password }}
         run: |
           echo "$PR_KEYSTORE" | base64 -d > pr-key.jks
           echo "SIGN_KEYSTORE_FILE=pr-key.jks" >> $GITHUB_ENV

@@ -26,7 +26,7 @@ typedef unsigned int (*kdp_usecount_sub_and_test_t)(int nr, struct cred *cred);
 #else
 typedef unsigned int (*kdp_usecount_dec_and_test_t)(struct cred *cred);
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
 // The 'type' argument is an enum whose tag differs across kernels (enum ucount_type
 // on 5.15, enum rlimit_type on newer trees) but is always int-sized. These are
 // dynamically-resolved call thunks, so we type it as int to stay ABI-correct across
@@ -52,7 +52,7 @@ static kdp_usecount_sub_and_test_t kdp_usecount_sub_and_test_fn;
 #else
 static kdp_usecount_dec_and_test_t kdp_usecount_dec_and_test_fn;
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
 static inc_rlimit_ucounts_t inc_rlimit_ucounts_fn;
 static dec_rlimit_ucounts_t dec_rlimit_ucounts_fn;
 #endif
@@ -87,7 +87,7 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
 
     user_changed = ro_cred->user != old_cred->user;
     if (user_changed) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
         inc_rlimit_ucounts_fn(ro_cred->ucounts, UCOUNT_RLIMIT_NPROC, 1);
 #else
         atomic_inc(&ro_cred->user->processes);
@@ -99,7 +99,7 @@ static void samsung_kdp_commit_worker(struct work_struct *work)
     kdp_assign_pgd_fn(target);
 
     if (user_changed) {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
         dec_rlimit_ucounts_fn(old_cred->ucounts, UCOUNT_RLIMIT_NPROC, 1);
 #else
         atomic_dec(&old_cred->user->processes);
@@ -159,7 +159,7 @@ int ksu_samsung_kdp_init(void)
         return -ENOENT;
     }
 #endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
     inc_rlimit_ucounts_fn = (inc_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("inc_rlimit_ucounts");
     dec_rlimit_ucounts_fn = (dec_rlimit_ucounts_t)ksu_resolve_symbol_for_functable_hook("dec_rlimit_ucounts");
     if (!inc_rlimit_ucounts_fn || !dec_rlimit_ucounts_fn) {
