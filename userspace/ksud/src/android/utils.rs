@@ -233,7 +233,7 @@ fn link_ksud_to_bin() -> Result<()> {
     Ok(())
 }
 
-pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Result<()> {
+pub fn stage_daemon() -> Result<()> {
     ensure_dir_exists(defs::ADB_DIR)?;
     let _ = std::fs::remove_file(defs::DAEMON_PATH);
     std::fs::copy(
@@ -242,6 +242,19 @@ pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Resul
         "/proc/self/exe",
         defs::DAEMON_PATH,
     )?;
+    Ok(())
+}
+
+pub fn install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Result<()> {
+    // Copy the daemon into place first, then run the steps that depend on
+    // KernelSU policy. On targets where loading the module changes this
+    // process's security context (e.g. Samsung KDP/RKP), callers should stage
+    // the daemon before the load and call finish_install() afterwards.
+    stage_daemon()?;
+    finish_install(libadbroot, data_path)
+}
+
+pub fn finish_install(libadbroot: Option<PathBuf>, data_path: Option<PathBuf>) -> Result<()> {
     restorecon::lsetfilecon(defs::DAEMON_PATH, restorecon::KSU_CON)?;
     // install binary assets
     assets::ensure_binaries(false).with_context(|| "Failed to extract assets")?;

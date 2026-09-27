@@ -15,6 +15,7 @@
 #include <linux/sched.h>
 
 #include "policy/allowlist.h"
+#include "ksu_samsung_kdp.h"
 #include "policy/app_profile.h"
 #include "policy/feature.h"
 #include "klog.h" // IWYU pragma: keep
@@ -36,6 +37,7 @@
 #include "feature/sucompat.h"
 #include "feature/selinux_hide.h"
 #include "infra/symbol_resolver.h"
+#include "compat/samsung_defex.h"
 
 #ifdef CONFIG_ARM64
 #include "compat/apatch_conflict.h"
@@ -168,6 +170,8 @@ MODULE_PARM_DESC(block_modules, "Comma-separated preset module names to acknowle
 
 int __init kernelsu_init(void)
 {
+    int ret;
+
     // clang-format off
     
     // ddk in x86-64 doesn't have generated/compile.h
@@ -226,13 +230,33 @@ int __init kernelsu_init(void)
     ksu_start_apatch_conflict_check();
 #endif
 
+#ifdef CONFIG_KSU_SAMSUNG_KDP
+    pr_info("Samsung KDP credential reference handling enabled\n");
+#endif
+
+    // The symbol resolver must be ready before Samsung KDP looks up the
+    // credential helpers it needs, and KDP must be initialised before any
+    // ksu_put_cred() runs (including the prepare_creds() failure path below).
+    ksu_init_symbol_resolver();
+
+    ret = ksu_samsung_kdp_init();
+    if (ret)
+        return ret;
+
     ksu_cred = prepare_creds();
     if (!ksu_cred) {
         pr_err("prepare cred failed!\n");
+        ksu_samsung_kdp_exit();
         return -ENOSYS;
     }
 
-    ksu_init_symbol_resolver();
+    ret = ksu_samsung_defex_init();
+    if (ret) {
+        ksu_put_cred(ksu_cred);
+        ksu_samsung_kdp_exit();
+        return ret;
+    }
+
     ksu_selinux_init();
     ksu_feature_init();
     ksu_sulog_init();
@@ -322,7 +346,9 @@ void __exit kernelsu_exit(void)
     ksu_feature_exit();
     ksu_module_load_filter_hook_exit();
 
-    put_cred(ksu_cred);
+    ksu_samsung_defex_exit();
+    ksu_put_cred(ksu_cred);
+    ksu_samsung_kdp_exit();
 }
 
 #if NEED_OWN_STACKPROTECTOR

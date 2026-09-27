@@ -18,6 +18,8 @@ kernelsu-objs += manager/manager.o
 endif
 
 kernelsu-objs += compat/kernel_compat.o
+kernelsu-objs += compat/samsung_kdp.o
+kernelsu-objs += compat/samsung_defex.o
 kernelsu-objs += infra/su_mount_ns.o
 kernelsu-objs += infra/seccomp_cache.o
 kernelsu-objs += infra/file_wrapper.o
@@ -47,8 +49,24 @@ ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-v
 ccflags-y += -Wno-int-to-pointer-cast -Wno-declaration-after-statement
 
 ccflags-y += -I$(srctree)/security/selinux -I$(srctree)/security/selinux/include
+ccflags-y += -I$(objtree)/security/selinux -I$(objtree)/security/selinux/include
 ccflags-y += -I$(srctree)/$(src) -I$(srctree)/$(src)/include
 ccflags-y += -I$(src) -I$(src)/include
+
+# Samsung KDP/RKP/DEFEX compatibility (64-bit kernel, 32-bit userspace targets).
+# These are opt-in and have no effect unless explicitly enabled in the kernel config.
+ifeq ($(CONFIG_KSU_SAMSUNG_KDP),y)
+ccflags-y += -DCONFIG_KSU_SAMSUNG_KDP=1
+endif
+ifeq ($(CONFIG_KSU_SAMSUNG_RKP),y)
+ccflags-y += -DCONFIG_KSU_SAMSUNG_RKP=1
+endif
+ifeq ($(CONFIG_KSU_SAMSUNG_DEFEX),y)
+ccflags-y += -DCONFIG_KSU_SAMSUNG_DEFEX=1
+endif
+ifeq ($(CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT),y)
+ccflags-y += -DCONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=1
+endif
 
 obj-$(CONFIG_KSU) += kernelsu.o
 
