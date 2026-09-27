@@ -27,8 +27,13 @@ typedef unsigned int (*kdp_usecount_sub_and_test_t)(int nr, struct cred *cred);
 typedef unsigned int (*kdp_usecount_dec_and_test_t)(struct cred *cred);
 #endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
-typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
-typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, enum rlimit_type type, long value);
+// The 'type' argument is an enum whose tag differs across kernels (enum ucount_type
+// on 5.15, enum rlimit_type on newer trees) but is always int-sized. These are
+// dynamically-resolved call thunks, so we type it as int to stay ABI-correct across
+// all trees without depending on a tag that may not be declared here. The value
+// passed (UCOUNT_RLIMIT_NPROC) is defined regardless of which enum owns it.
+typedef long (*inc_rlimit_ucounts_t)(struct ucounts *ucounts, int type, long value);
+typedef bool (*dec_rlimit_ucounts_t)(struct ucounts *ucounts, int type, long value);
 #endif
 
 struct samsung_kdp_commit_work {

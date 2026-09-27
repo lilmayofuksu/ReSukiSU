@@ -150,12 +150,6 @@ jobs:
             echo "title=Manager" >> $GITHUB_OUTPUT
           fi
 
-      - name: Run randomizer
-        if: ${{ matrix.manager_type == 'spoofed' }}
-        run: |
-          chmod +x randomizer
-          ./randomizer
-
       - name: Write PR key
         env:
           PR_KEYSTORE: ${{ needs.prepare.outputs.keystore }}
