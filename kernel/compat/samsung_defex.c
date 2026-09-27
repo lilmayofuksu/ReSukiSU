@@ -69,7 +69,9 @@ void ksu_samsung_defex_exit(void)
 #endif
 }
 
-void ksu_samsung_defex_sync_current(void)
+// __nocfi: calls the dynamically-resolved get_task_creds / set_task_creds thunks;
+// kernel CFI cannot validate by-name lookups against a hand-written typedef.
+void __nocfi ksu_samsung_defex_sync_current(void)
 {
 #ifdef CONFIG_KSU_SAMSUNG_DEFEX
     const struct cred *cred = current_cred();

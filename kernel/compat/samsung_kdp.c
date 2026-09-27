@@ -57,7 +57,14 @@ static inc_rlimit_ucounts_t inc_rlimit_ucounts_fn;
 static dec_rlimit_ucounts_t dec_rlimit_ucounts_fn;
 #endif
 
-static void samsung_kdp_commit_worker(struct work_struct *work)
+// __nocfi: this worker calls kernel functions resolved dynamically by name
+// (prepare_ro_creds / kdp_assign_pgd / inc_rlimit_ucounts / dec_rlimit_ucounts)
+// through hand-written typedefs. Kernel CFI type-checks indirect calls against
+// the pointer's type hash, which cannot be guaranteed to match the real symbol's
+// hash across kernels (e.g. the ucounts 'type' arg is an enum whose tag/hash
+// differs per tree). CFI adds no real safety for by-name lookups, so disable it
+// for this function to avoid a "CFI failure" panic on the credential-install path.
+static void __nocfi samsung_kdp_commit_worker(struct work_struct *work)
 {
     struct samsung_kdp_commit_work *commit_work = container_of(work, struct samsung_kdp_commit_work, work);
     struct task_struct *target = commit_work->target;
@@ -119,7 +126,9 @@ out:
 }
 #endif
 
-void ksu_samsung_kdp_put_cred(const struct cred *cred)
+// __nocfi: calls the dynamically-resolved kdp_usecount_*_and_test thunks (see the
+// note on samsung_kdp_commit_worker).
+void __nocfi ksu_samsung_kdp_put_cred(const struct cred *cred)
 {
 #ifdef CONFIG_KSU_SAMSUNG_KDP
     struct cred *mutable_cred = (struct cred *)cred;
